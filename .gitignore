@@ -1,6 +1,6 @@
 # Build outputs
 bin/
-./obj
+obj/
 dist/
 artifacts/
 TestResults/
@@ -30,6 +30,6 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
-./tools
+tools/
 # sts2
 sts2/

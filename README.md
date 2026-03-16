@@ -1,28 +1,21 @@
-# StartHandPickerMod
+# SlayTheSpire2.CardsAndRelicsChooser
 
 ## Feature
-- Add a `开局手牌` button in main menu.
-- Configure card picks and counts before run start.
-- On first `fromHandDraw` of a new run, replace default draw with your configured cards.
 
-## Config
-- Runtime config path (auto-generated):
-  - `mods/StartHandPickerMod/start_hand_picker_config.json`
-- Line format in UI text box:
-  - `CardIdOrName,Count`
-- Example:
-  - `StrikeIronclad,3`
-  - `DefendIronclad,2`
+- You can add and delete cards and relics in your game.   (Relics waited to be add later, now you can deal with cards.)
 
-## Build (requires .NET 9 SDK)
-1. `dotnet build modding/projects/StartHandPickerMod/StartHandPickerMod.csproj -c Release`
-2. Copy output DLL to your mod folder:
-   - `mods/StartHandPickerMod/StartHandPickerMod.dll`
-3. Build or update your `.pck` so it contains at least:
-   - `mod_manifest.json`
-   - optional `mod_image.png`
+![button](./imgs/button.jpg)
+
+- Below is the add page.
+
+![add](./imgs/add.jpg)
+  
+## How to use it
+
+- Please look at the release page, download the zip file and unzip it, then create a folder named 'mods' in the same directory as SlaytheSpire2.exe (just the root folder) , and place the entire extracted folder inside it.
 
 ## References
+
 - `sts2.dll`
 - `GodotSharp.dll`
 - `0Harmony.dll`

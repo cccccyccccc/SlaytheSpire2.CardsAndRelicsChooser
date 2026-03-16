@@ -30,6 +30,7 @@ using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
 using MegaCrit.Sts2.Core.Nodes.Screens.Capstones;
 using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
 using MegaCrit.Sts2.Core.Nodes.Screens.PauseMenu;
+using MegaCrit.Sts2.Core.Nodes.TopBar;
 using MegaCrit.Sts2.Core.Runs;
 
 namespace StartHandPickerMod;
@@ -865,6 +866,8 @@ internal static class LiveDeckEditor
     private static bool _isBusy;
     private static bool _awaitingCardLibraryPick;
     private static bool _navigationUiForcedVisible;
+    private static bool _skipNextLibraryClosedCleanup;
+    private static bool _pendingRestoreAfterDeckView;
     private static RunState? _pendingAddState;
     private static ulong _pendingAddPlayerNetId;
 
@@ -965,8 +968,65 @@ internal static class LiveDeckEditor
             return;
         }
 
+        if (_skipNextLibraryClosedCleanup)
+        {
+            _skipNextLibraryClosedCleanup = false;
+            Log.Info("Card library closed while switching to deck view; preserving add-picker context.");
+            return;
+        }
+
+        _pendingRestoreAfterDeckView = false;
         Log.Info("Card library closed; exiting continuous add mode.");
         ClearCardLibraryPick("library_closed");
+    }
+
+    public static void NotifyDeckViewOpenRequested()
+    {
+        if (!_awaitingCardLibraryPick)
+        {
+            return;
+        }
+
+        if (NCapstoneContainer.Instance?.CurrentCapstoneScreen is not NCapstoneSubmenuStack)
+        {
+            return;
+        }
+
+        _skipNextLibraryClosedCleanup = true;
+        _pendingRestoreAfterDeckView = true;
+        Log.Info("Deck view opened from add-picker; will restore add-picker on deck close.");
+    }
+
+    public static void NotifyDeckViewClosed()
+    {
+        if (!_pendingRestoreAfterDeckView)
+        {
+            return;
+        }
+
+        _pendingRestoreAfterDeckView = false;
+
+        if (!_awaitingCardLibraryPick)
+        {
+            Log.Warn("Deck view closed but add-picker context is no longer active.");
+            return;
+        }
+
+        if (!TryResolvePendingAddContext(out var state, out _))
+        {
+            Log.Warn("Deck view closed but add-picker context is invalid.");
+            ClearCardLibraryPick("deck_view_closed_missing_context");
+            return;
+        }
+
+        if (TryOpenCardLibraryPicker(state))
+        {
+            Log.Info("Restored add-picker after closing deck view.");
+            return;
+        }
+
+        Log.Warn("Failed to restore add-picker after closing deck view.");
+        ClearCardLibraryPick("deck_view_restore_failed");
     }
 
     private static async Task RemoveCardFlow()
@@ -1155,6 +1215,8 @@ internal static class LiveDeckEditor
         }
 
         HideNavigationUiForSelection();
+        _skipNextLibraryClosedCleanup = false;
+        _pendingRestoreAfterDeckView = false;
         _awaitingCardLibraryPick = false;
         _pendingAddState = null;
         _pendingAddPlayerNetId = 0;
@@ -1272,6 +1334,25 @@ internal static class CardLibraryOnSubmenuClosedPatch
     public static void Postfix()
     {
         LiveDeckEditor.NotifyCardLibraryClosed();
+    }
+}
+
+
+[HarmonyPatch(typeof(NTopBarDeckButton), "OnRelease")]
+internal static class TopBarDeckButtonOnReleasePatch
+{
+    public static void Prefix()
+    {
+        LiveDeckEditor.NotifyDeckViewOpenRequested();
+    }
+}
+
+[HarmonyPatch(typeof(NDeckViewScreen), nameof(NDeckViewScreen.AfterCapstoneClosed))]
+internal static class DeckViewAfterCapstoneClosedPatch
+{
+    public static void Postfix()
+    {
+        LiveDeckEditor.NotifyDeckViewClosed();
     }
 }
 
