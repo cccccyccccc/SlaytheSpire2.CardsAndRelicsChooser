@@ -8,7 +8,7 @@
     "net9.0": []
   },
   "packageFolders": {
-    "C:\\Users\\21023\\.nuget\\packages\\": {},
+    "D:\\steam\\steamapps\\common\\Slay the Spire 2\\modproject\\StartHandPickerMod\\.dotnet\\.nuget\\packages\\": {},
     "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages": {}
   },
   "project": {
@@ -17,7 +17,7 @@
       "projectUniqueName": "D:\\steam\\steamapps\\common\\Slay the Spire 2\\modproject\\StartHandPickerMod\\StartHandPickerMod.csproj",
       "projectName": "StartHandPickerMod",
       "projectPath": "D:\\steam\\steamapps\\common\\Slay the Spire 2\\modproject\\StartHandPickerMod\\StartHandPickerMod.csproj",
-      "packagesPath": "C:\\Users\\21023\\.nuget\\packages\\",
+      "packagesPath": "D:\\steam\\steamapps\\common\\Slay the Spire 2\\modproject\\StartHandPickerMod\\.dotnet\\.nuget\\packages\\",
       "outputPath": "D:\\steam\\steamapps\\common\\Slay the Spire 2\\modproject\\StartHandPickerMod\\obj\\",
       "projectStyle": "PackageReference",
       "fallbackFolders": [
@@ -89,5 +89,13 @@
         "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\10.0.201/PortableRuntimeIdentifierGraph.json"
       }
     }
-  }
+  },
+  "logs": [
+    {
+      "code": "NU1900",
+      "level": "Warning",
+      "warningLevel": 1,
+      "message": "获取包漏洞数据时出错: 无法加载源 https://api.nuget.org/v3/index.json 的服务索引。"
+    }
+  ]
 }

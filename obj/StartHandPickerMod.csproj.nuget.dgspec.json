@@ -10,7 +10,7 @@
         "projectUniqueName": "D:\\steam\\steamapps\\common\\Slay the Spire 2\\modproject\\StartHandPickerMod\\StartHandPickerMod.csproj",
         "projectName": "StartHandPickerMod",
         "projectPath": "D:\\steam\\steamapps\\common\\Slay the Spire 2\\modproject\\StartHandPickerMod\\StartHandPickerMod.csproj",
-        "packagesPath": "C:\\Users\\21023\\.nuget\\packages\\",
+        "packagesPath": "D:\\steam\\steamapps\\common\\Slay the Spire 2\\modproject\\StartHandPickerMod\\.dotnet\\.nuget\\packages\\",
         "outputPath": "D:\\steam\\steamapps\\common\\Slay the Spire 2\\modproject\\StartHandPickerMod\\obj\\",
         "projectStyle": "PackageReference",
         "fallbackFolders": [

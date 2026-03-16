@@ -7,7 +7,6 @@ using MegaCrit.Sts2.Core.Entities.UI;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Models.CardPools;
 using MegaCrit.Sts2.Core.Nodes.Cards;
-using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
 
 namespace StartHandPickerMod;
 
@@ -16,6 +15,13 @@ internal static class DeckPickerPanel
     private const string OpenButtonName = "StartDeckPickerOpenButton";
     private const string PanelName = "StartDeckPickerPanel";
     private const int MaxRenderedCards = 160;
+    private const float GridHSeparation = 18f;
+    private const float GridVSeparation = 18f;
+    private const float CardFrameWidth = 260f;
+    private const float CardFrameHeight = CardFrameWidth * 422f / 300f;
+    private const float CardRenderScale = CardFrameWidth / 300f;
+    private const float CardCellWidth = CardFrameWidth + 8f;
+    private const float CardCellHeight = CardFrameHeight + 34f;
 
     private static CheckBox? _enabledToggle;
     private static LineEdit? _searchEdit;
@@ -108,15 +114,25 @@ internal static class DeckPickerPanel
         public Panel SelectedOutline { get; init; } = null!;
     }
 
-    public static void Attach(NMainMenu mainMenu)
+    public static void Attach(Control host, bool includeOpenButton = true)
     {
-        AttachOpenButton(mainMenu);
-        AttachPanel(mainMenu);
+        if (includeOpenButton)
+        {
+            AttachOpenButton(host);
+        }
+
+        AttachPanel(host);
     }
 
-    private static void AttachOpenButton(NMainMenu mainMenu)
+    public static void Open(Control host)
     {
-        if (mainMenu.GetNodeOrNull<Button>(OpenButtonName) != null)
+        AttachPanel(host);
+        TogglePanel(host, true);
+    }
+
+    private static void AttachOpenButton(Control host)
+    {
+        if (host.GetNodeOrNull<Button>(OpenButtonName) != null)
         {
             return;
         }
@@ -138,13 +154,13 @@ internal static class DeckPickerPanel
         button.OffsetRight = 160;
         button.OffsetBottom = 58;
 
-        button.Pressed += () => TogglePanel(mainMenu, true);
-        mainMenu.AddChild(button);
+        button.Pressed += () => TogglePanel(host, true);
+        host.AddChild(button);
     }
 
-    private static void AttachPanel(NMainMenu mainMenu)
+    private static void AttachPanel(Control host)
     {
-        if (mainMenu.GetNodeOrNull<PanelContainer>(PanelName) != null)
+        if (host.GetNodeOrNull<PanelContainer>(PanelName) != null)
         {
             return;
         }
@@ -244,8 +260,8 @@ internal static class DeckPickerPanel
             Columns = 4,
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
         };
-        _cardGrid.AddThemeConstantOverride("h_separation", 18);
-        _cardGrid.AddThemeConstantOverride("v_separation", 18);
+        _cardGrid.AddThemeConstantOverride("h_separation", (int)GridHSeparation);
+        _cardGrid.AddThemeConstantOverride("v_separation", (int)GridVSeparation);
         scroll.AddChild(_cardGrid);
 
         var selectedRow = new HBoxContainer();
@@ -295,7 +311,7 @@ internal static class DeckPickerPanel
         saveButton.Pressed += SaveFromUi;
 
         var closeButton = new Button { Text = "关闭" };
-        closeButton.Pressed += () => TogglePanel(mainMenu, false);
+        closeButton.Pressed += () => TogglePanel(host, false);
 
         _statusLabel = new Label
         {
@@ -319,7 +335,7 @@ internal static class DeckPickerPanel
 
         margin.AddChild(root);
         panel.AddChild(margin);
-        mainMenu.AddChild(panel);
+        host.AddChild(panel);
 
         panel.Resized += () => UpdateGridColumns(panel);
 
@@ -336,7 +352,9 @@ internal static class DeckPickerPanel
             return;
         }
 
-        var cols = Math.Clamp((int)(panel.Size.X / 250f), 2, 7);
+        var available = Math.Max(0f, panel.Size.X - 48f);
+        var cols = (int)((available + GridHSeparation) / (CardCellWidth + GridHSeparation));
+        cols = Math.Clamp(cols, 2, 5);
         _cardGrid.Columns = cols;
     }
 
@@ -516,7 +534,7 @@ internal static class DeckPickerPanel
     {
         var cell = new VBoxContainer
         {
-            CustomMinimumSize = new Vector2(248, 360),
+            CustomMinimumSize = new Vector2(CardCellWidth, CardCellHeight),
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
         };
         cell.AddThemeConstantOverride("separation", 6);
@@ -525,7 +543,7 @@ internal static class DeckPickerPanel
         {
             Flat = true,
             FocusMode = Control.FocusModeEnum.None,
-            CustomMinimumSize = new Vector2(236, 316),
+            CustomMinimumSize = new Vector2(CardFrameWidth, CardFrameHeight),
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
             ClipContents = true,
             Text = string.Empty
@@ -621,6 +639,7 @@ internal static class DeckPickerPanel
                 {
                     try
                     {
+                        cardNode.Scale = new Vector2(CardRenderScale, CardRenderScale);
                         cardNode.UpdateVisuals(PileType.None, CardPreviewMode.Normal);
                     }
                     catch (Exception ex)
@@ -629,7 +648,7 @@ internal static class DeckPickerPanel
                     }
                 };
 
-                cardNode.Scale = new Vector2(0.36f, 0.36f);
+                cardNode.Scale = new Vector2(CardRenderScale, CardRenderScale);
                 SetMouseFilterRecursive(cardNode, Control.MouseFilterEnum.Ignore);
                 return cardNode;
             }
@@ -746,9 +765,9 @@ internal static class DeckPickerPanel
         }
     }
 
-    private static void TogglePanel(NMainMenu mainMenu, bool visible)
+    private static void TogglePanel(Control host, bool visible)
     {
-        var panel = mainMenu.GetNodeOrNull<PanelContainer>(PanelName);
+        var panel = host.GetNodeOrNull<PanelContainer>(PanelName);
         if (panel == null)
         {
             return;
@@ -763,6 +782,10 @@ internal static class DeckPickerPanel
         panel.Visible = visible;
     }
 }
+
+
+
+
 
 
 

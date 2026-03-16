@@ -16,6 +16,7 @@ using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Modding;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
+using MegaCrit.Sts2.Core.Nodes.Screens.PauseMenu;
 using MegaCrit.Sts2.Core.Runs;
 
 namespace StartHandPickerMod;
@@ -711,19 +712,48 @@ internal static class MainMenuUi
     }
 }
 
-[HarmonyPatch(typeof(NMainMenu), "_Ready")]
-internal static class MainMenuPatch
+[HarmonyPatch(typeof(NPauseMenu), "_Ready")]
+internal static class PauseMenuPatch
 {
-    public static void Postfix(NMainMenu __instance)
+    private const string PauseMenuEntryName = "StartHandPickerPauseMenuEntry";
+
+    public static void Postfix(NPauseMenu __instance)
     {
         try
         {
-            MainMenuUi.Attach(__instance);
+            DeckPickerPanel.Attach(__instance, includeOpenButton: false);
+            AttachPauseMenuEntry(__instance);
         }
         catch (Exception ex)
         {
-            Log.Error($"Failed to attach StartHandPicker UI: {ex.Message}");
+            Log.Error($"Failed to attach in-run StartHandPicker UI: {ex.Message}");
         }
+    }
+
+    private static void AttachPauseMenuEntry(NPauseMenu pauseMenu)
+    {
+        var buttonContainer = pauseMenu.GetNodeOrNull<Control>("%ButtonContainer");
+        if (buttonContainer == null)
+        {
+            return;
+        }
+
+        if (buttonContainer.GetNodeOrNull<Button>(PauseMenuEntryName) != null)
+        {
+            return;
+        }
+
+        var openButton = new Button
+        {
+            Name = PauseMenuEntryName,
+            Text = "开局牌库配置",
+            FocusMode = Control.FocusModeEnum.All,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            CustomMinimumSize = new Vector2(0, 46)
+        };
+
+        openButton.Pressed += () => DeckPickerPanel.Open(pauseMenu);
+        buttonContainer.AddChild(openButton);
     }
 }
 
@@ -837,6 +867,10 @@ internal static class Log
         }
     }
 }
+
+
+
+
 
 
 
