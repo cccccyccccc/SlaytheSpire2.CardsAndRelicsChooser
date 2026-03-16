@@ -1,12 +1,12 @@
 {
   "version": 2,
-  "dgSpecHash": "1dcz5HA7vGQ=",
+  "dgSpecHash": "wzEKJG5a3AM=",
   "success": true,
   "projectFilePath": "D:\\steam\\steamapps\\common\\Slay the Spire 2\\modproject\\StartHandPickerMod\\StartHandPickerMod.csproj",
   "expectedPackageFiles": [
-    "D:\\steam\\steamapps\\common\\Slay the Spire 2\\modproject\\StartHandPickerMod\\.nuget\\packages\\microsoft.netcore.app.ref\\9.0.14\\microsoft.netcore.app.ref.9.0.14.nupkg.sha512",
-    "D:\\steam\\steamapps\\common\\Slay the Spire 2\\modproject\\StartHandPickerMod\\.nuget\\packages\\microsoft.windowsdesktop.app.ref\\9.0.14\\microsoft.windowsdesktop.app.ref.9.0.14.nupkg.sha512",
-    "D:\\steam\\steamapps\\common\\Slay the Spire 2\\modproject\\StartHandPickerMod\\.nuget\\packages\\microsoft.aspnetcore.app.ref\\9.0.14\\microsoft.aspnetcore.app.ref.9.0.14.nupkg.sha512"
+    "C:\\Users\\21023\\.nuget\\packages\\microsoft.netcore.app.ref\\9.0.14\\microsoft.netcore.app.ref.9.0.14.nupkg.sha512",
+    "C:\\Users\\21023\\.nuget\\packages\\microsoft.windowsdesktop.app.ref\\9.0.14\\microsoft.windowsdesktop.app.ref.9.0.14.nupkg.sha512",
+    "C:\\Users\\21023\\.nuget\\packages\\microsoft.aspnetcore.app.ref\\9.0.14\\microsoft.aspnetcore.app.ref.9.0.14.nupkg.sha512"
   ],
   "logs": []
 }

@@ -161,26 +161,25 @@ internal static class RuntimeState
 {
     private static bool _pendingForCurrentRun;
 
-    public static void MarkRunStarted()
+    public static void MarkRunStarted(string source)
     {
         _pendingForCurrentRun = ConfigStore.Current.Enabled && ConfigStore.Current.Picks.Count > 0;
-        Log.Info($"Run started; pending start-hand apply = {_pendingForCurrentRun}");
+        Log.Info($"Run started via {source}; pending start-hand apply = {_pendingForCurrentRun}");
     }
 
-    public static void ClearPending()
+    public static bool HasPending()
     {
-        _pendingForCurrentRun = false;
+        return _pendingForCurrentRun;
     }
 
-    public static bool TryConsumePending()
+    public static void ClearPending(string reason)
     {
-        if (!_pendingForCurrentRun)
+        if (_pendingForCurrentRun)
         {
-            return false;
+            Log.Info($"Clearing pending start hand. reason={reason}");
         }
 
         _pendingForCurrentRun = false;
-        return true;
     }
 }
 
@@ -272,71 +271,106 @@ internal static class CardResolver
 
 internal static class StartHandApplier
 {
-    public static void TryApply(Player player, ref decimal drawCount, bool fromHandDraw)
+    public static bool TryApplyToRun(RunState? state, string source)
     {
-        if (!fromHandDraw)
+        if (!RuntimeState.HasPending())
         {
-            return;
+            return false;
         }
 
-        if (!ConfigStore.Current.Enabled)
+        if (!ConfigStore.Current.Enabled || ConfigStore.Current.Picks.Count == 0)
         {
-            return;
+            RuntimeState.ClearPending($"{source}: disabled or empty config");
+            return false;
         }
 
-        if (!RuntimeState.TryConsumePending())
+        if (state == null || state.Players.Count == 0)
         {
-            return;
+            Log.Warn($"{source}: run state unavailable or has no players.");
+            return false;
         }
 
-        if (player?.Creature?.CombatState == null)
-        {
-            Log.Warn("Combat state unavailable when trying to apply selected start hand.");
-            return;
-        }
-
-        drawCount = 0m;
-
-        var totalAdded = 0;
-        var failed = new List<string>();
+        var resolved = new List<(CardModel Canonical, int Count)>();
+        var unresolved = new List<string>();
 
         foreach (var pick in ConfigStore.Current.Picks)
         {
             if (!CardResolver.TryResolve(pick.Key, out var canonical))
             {
-                failed.Add(pick.Key);
+                unresolved.Add(pick.Key);
                 continue;
             }
 
-            var count = Math.Clamp(pick.Count, 1, 99);
-            for (var i = 0; i < count; i++)
+            resolved.Add((canonical, Math.Clamp(pick.Count, 1, 99)));
+        }
+
+        if (resolved.Count == 0)
+        {
+            RuntimeState.ClearPending($"{source}: no valid cards to apply");
+            Log.Warn("No valid cards found in config. Deck was not changed.");
+            if (unresolved.Count > 0)
             {
-                try
+                Log.Warn($"Unresolved keys: {string.Join(", ", unresolved)}");
+            }
+            return false;
+        }
+
+        var totalAddedAllPlayers = 0;
+
+        foreach (var player in state.Players)
+        {
+            totalAddedAllPlayers += RebuildPlayerDeck(state, player, resolved);
+        }
+
+        RuntimeState.ClearPending($"{source}: deck rebuild completed");
+
+        Log.Info($"Applied start deck after run start via {source}. totalAdded={totalAddedAllPlayers}, players={state.Players.Count}");
+        if (unresolved.Count > 0)
+        {
+            Log.Warn($"Some configured keys were not found: {string.Join(", ", unresolved)}");
+        }
+
+        return true;
+    }
+
+    private static int RebuildPlayerDeck(RunState state, Player player, IReadOnlyList<(CardModel Canonical, int Count)> resolved)
+    {
+        var oldCards = player.Deck.Cards.ToList();
+        Log.Info($"Rebuilding deck for player netId={player.NetId}. oldCount={oldCards.Count}");
+
+        foreach (var oldCard in oldCards)
+        {
+            try
+            {
+                oldCard.RemoveFromState();
+                if (state.ContainsCard(oldCard))
                 {
-                    var mutable = player.Creature.CombatState.CreateCard(canonical, player);
-                    CardPileCmd
-                        .AddGeneratedCardToCombat(mutable, PileType.Hand, true, CardPilePosition.Top)
-                        .GetAwaiter()
-                        .GetResult();
-                    totalAdded++;
+                    state.RemoveCard(oldCard);
                 }
-                catch (Exception ex)
-                {
-                    failed.Add($"{pick.Key} ({ex.Message})");
-                    break;
-                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Failed removing old deck card {oldCard.Id.Entry}: {ex.Message}");
             }
         }
 
-        if (totalAdded > 0)
+        player.Deck.Clear(true);
+
+        var added = 0;
+        foreach (var entry in resolved)
         {
-            Log.Info($"Applied selected start hand. Added {totalAdded} cards.");
+            for (var i = 0; i < entry.Count; i++)
+            {
+                var card = state.CreateCard(entry.Canonical, player);
+                card.FloorAddedToDeck = 1;
+                player.Deck.AddInternal(card, -1, true);
+                added++;
+            }
         }
 
-        if (failed.Count > 0)
-        {
-            Log.Warn($"Some selected cards could not be added: {string.Join("; ", failed)}");
-        }
+        player.Deck.InvokeContentsChanged();
+        Log.Info($"Deck rebuild finished for player netId={player.NetId}. newCount={added}");
+        return added;
     }
 }
 
@@ -353,8 +387,7 @@ internal static class MainMenuUi
 
     public static void Attach(NMainMenu mainMenu)
     {
-        AttachOpenButton(mainMenu);
-        AttachPanel(mainMenu);
+        DeckPickerPanel.Attach(mainMenu);
     }
 
     private static void AttachOpenButton(NMainMenu mainMenu)
@@ -367,7 +400,7 @@ internal static class MainMenuUi
         var button = new Button
         {
             Name = OpenButtonName,
-            Text = "开局手牌",
+            Text = "开局牌库",
             FocusMode = Control.FocusModeEnum.None,
             CustomMinimumSize = new Vector2(140, 38)
         };
@@ -409,13 +442,13 @@ internal static class MainMenuUi
 
         var title = new Label
         {
-            Text = "开局手牌配置（每行: 卡牌ID,数量）",
+            Text = "开局牌库配置（每行: 卡牌ID,数量）",
             HorizontalAlignment = HorizontalAlignment.Left
         };
 
         var help = new Label
         {
-            Text = "你可以从下拉框添加，也可以手输。示例: StrikeIronclad,3",
+            Text = "新开局创建后会重建牌库。你可以从下拉框添加，也可以手输。示例: StrikeIronclad,3",
             AutowrapMode = TextServer.AutowrapMode.Word
         };
 
@@ -514,9 +547,8 @@ internal static class MainMenuUi
         }
 
         _enabledToggle!.ButtonPressed = ConfigStore.Current.Enabled;
-        var lines = ConfigStore.Current.Picks.Select(p => $"{p.Key},{p.Count}");
-        _entryTextEdit.Text = string.Join('\n', lines);
-        _statusLabel!.Text = $"配置文件: {ConfigStore.ConfigPath}";
+        _entryTextEdit.Text = ToEditorText(ConfigStore.Current.Picks);
+        _statusLabel!.Text = $"配置文件: {ConfigStore.ConfigPath}\n日志文件: {Log.FilePath}";
     }
 
     private static void AddSelectedCardToText()
@@ -539,15 +571,24 @@ internal static class MainMenuUi
 
         var key = _cardSelector.GetItemMetadata(idx).AsString();
         var count = (int)Math.Clamp(_countSpin.Value, 1, 99);
-        var line = $"{key},{count}";
 
-        if (string.IsNullOrWhiteSpace(_entryTextEdit.Text))
+        var picks = ParsePicks(_entryTextEdit.Text, mergeDuplicates: true);
+        var normalized = NormalizePickKey(key);
+        var existing = picks.FirstOrDefault(p => NormalizePickKey(p.Key) == normalized);
+
+        if (existing == null)
         {
-            _entryTextEdit.Text = line;
+            picks.Add(new CardPick { Key = key, Count = count });
         }
         else
         {
-            _entryTextEdit.Text += $"\n{line}";
+            existing.Count = Math.Clamp(existing.Count + count, 1, 99);
+        }
+
+        _entryTextEdit.Text = ToEditorText(picks);
+        if (_statusLabel != null)
+        {
+            _statusLabel.Text = $"已添加 {key} x{count}（重复项会自动合并）";
         }
     }
 
@@ -561,16 +602,17 @@ internal static class MainMenuUi
         var config = new StartHandConfig
         {
             Enabled = _enabledToggle.ButtonPressed,
-            Picks = ParsePicks(_entryTextEdit.Text)
+            Picks = ParsePicks(_entryTextEdit.Text, mergeDuplicates: true)
         };
 
         ConfigStore.Set(config);
-        _statusLabel.Text = $"已保存。下次开局将使用 {config.Picks.Count} 条配置。";
+        _entryTextEdit.Text = ToEditorText(config.Picks);
+        _statusLabel.Text = $"已保存。下次开局将使用 {config.Picks.Count} 条配置。\n日志文件: {Log.FilePath}";
 
         TogglePanel(mainMenu, false);
     }
 
-    private static List<CardPick> ParsePicks(string raw)
+    private static List<CardPick> ParsePicks(string raw, bool mergeDuplicates = false)
     {
         var output = new List<CardPick>();
 
@@ -604,7 +646,52 @@ internal static class MainMenuUi
             output.Add(new CardPick { Key = key, Count = count });
         }
 
+        return mergeDuplicates ? MergeDuplicatePicks(output) : output;
+    }
+
+    private static List<CardPick> MergeDuplicatePicks(IEnumerable<CardPick> picks)
+    {
+        var output = new List<CardPick>();
+        var indexByKey = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var pick in picks)
+        {
+            var key = pick.Key?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            var normalized = NormalizePickKey(key);
+            var count = Math.Clamp(pick.Count, 1, 99);
+
+            if (indexByKey.TryGetValue(normalized, out var idx))
+            {
+                output[idx].Count = Math.Clamp(output[idx].Count + count, 1, 99);
+            }
+            else
+            {
+                indexByKey[normalized] = output.Count;
+                output.Add(new CardPick { Key = key, Count = count });
+            }
+        }
+
         return output;
+    }
+
+    private static string NormalizePickKey(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return string.Empty;
+        }
+
+        return new string(raw.Where(c => !char.IsWhiteSpace(c)).ToArray()).ToUpperInvariant();
+    }
+
+    private static string ToEditorText(IEnumerable<CardPick> picks)
+    {
+        return string.Join('\n', picks.Select(p => $"{p.Key},{Math.Clamp(p.Count, 1, 99)}"));
     }
 
     private static void TogglePanel(NMainMenu mainMenu, bool visible)
@@ -640,50 +727,128 @@ internal static class MainMenuPatch
     }
 }
 
-[HarmonyPatch]
-internal static class RunManagerPatch
+internal static class RunStartHooks
 {
-    private static MethodBase? TargetMethod()
+    public static void Mark(string source)
     {
-        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-        var runManagerType = typeof(RunManager);
-
-        return runManagerType.GetMethod("InitializeNewRun", flags)
-            ?? runManagerType.GetMethod("SetUpNewSinglePlayer", flags)
-            ?? runManagerType.GetMethod("SetUpNewMultiPlayer", flags);
-    }
-
-    public static void Postfix()
-    {
-        RuntimeState.MarkRunStarted();
+        RuntimeState.MarkRunStarted(source);
     }
 }
 
-[HarmonyPatch(typeof(CardPileCmd), nameof(CardPileCmd.Draw), new[] { typeof(PlayerChoiceContext), typeof(decimal), typeof(Player), typeof(bool) })]
-internal static class DrawPatch
+[HarmonyPatch(typeof(RunManager), "InitializeNewRun")]
+internal static class RunManagerInitializeNewRunPatch
 {
-    public static void Prefix(ref decimal count, Player player, bool fromHandDraw)
+    public static void Postfix()
     {
-        try
-        {
-            StartHandApplier.TryApply(player, ref count, fromHandDraw);
-        }
-        catch (Exception ex)
-        {
-            RuntimeState.ClearPending();
-            Log.Error($"Start hand apply failed: {ex.Message}");
-        }
+        RunStartHooks.Mark("InitializeNewRun");
+    }
+}
+
+[HarmonyPatch(typeof(RunManager), nameof(RunManager.SetUpNewSinglePlayer))]
+internal static class RunManagerSetUpNewSinglePlayerPatch
+{
+    public static void Postfix(RunState state)
+    {
+        RunStartHooks.Mark(nameof(RunManager.SetUpNewSinglePlayer));
+        StartHandApplier.TryApplyToRun(state, nameof(RunManager.SetUpNewSinglePlayer));
+    }
+}
+
+[HarmonyPatch(typeof(RunManager), nameof(RunManager.SetUpNewMultiPlayer))]
+internal static class RunManagerSetUpNewMultiPlayerPatch
+{
+    public static void Postfix(RunState state)
+    {
+        RunStartHooks.Mark(nameof(RunManager.SetUpNewMultiPlayer));
+        StartHandApplier.TryApplyToRun(state, nameof(RunManager.SetUpNewMultiPlayer));
+    }
+}
+
+[HarmonyPatch(typeof(RunManager), "InitializeSavedRun")]
+internal static class RunManagerInitializeSavedRunPatch
+{
+    public static void Postfix()
+    {
+        RuntimeState.ClearPending("InitializeSavedRun");
     }
 }
 
 internal static class Log
 {
-    public static void Info(string message) => GD.Print($"[StartHandPickerMod] {message}");
+    private static readonly object Sync = new();
+    private static string? _filePath;
 
-    public static void Warn(string message) => GD.Print($"[StartHandPickerMod][WARN] {message}");
+    public static string FilePath
+    {
+        get
+        {
+            if (!string.IsNullOrWhiteSpace(_filePath))
+            {
+                return _filePath;
+            }
 
-    public static void Error(string message) => GD.PrintErr($"[StartHandPickerMod][ERROR] {message}");
+            var dir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            if (string.IsNullOrWhiteSpace(dir))
+            {
+                dir = AppContext.BaseDirectory;
+            }
+
+            var logDir = Path.Combine(dir, "logs");
+            _filePath = Path.Combine(logDir, "start_hand_picker.log");
+            return _filePath;
+        }
+    }
+
+    public static void Info(string message) => Write("INFO", message, isError: false);
+
+    public static void Warn(string message) => Write("WARN", message, isError: false);
+
+    public static void Error(string message) => Write("ERROR", message, isError: true);
+
+    private static void Write(string level, string message, bool isError)
+    {
+        var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] {message}";
+
+        if (isError)
+        {
+            GD.PrintErr($"[StartHandPickerMod][{level}] {message}");
+        }
+        else
+        {
+            GD.Print($"[StartHandPickerMod][{level}] {message}");
+        }
+
+        try
+        {
+            var folder = Path.GetDirectoryName(FilePath);
+            if (!string.IsNullOrWhiteSpace(folder))
+            {
+                Directory.CreateDirectory(folder);
+            }
+
+            lock (Sync)
+            {
+                File.AppendAllText(FilePath, line + System.Environment.NewLine, Encoding.UTF8);
+            }
+        }
+        catch
+        {
+            // Ignore file logging failures to keep gameplay unaffected.
+        }
+    }
 }
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -1,7 +1,8 @@
 param(
     [string]$ProjectDir = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path,
     [switch]$BuildDll,
-    [switch]$DeployToMods
+    [switch]$DeployToMods,
+    [string]$DeployFolderName = 'SlayTheSpire2.StartHandPickerMod'
 )
 
 Set-StrictMode -Version Latest
@@ -152,7 +153,7 @@ Write-Host "PCK built:" $pckPath
 if ($DeployToMods) {
     $modsRoot = Join-Path (Split-Path $ProjectDir -Parent -Resolve) '..\\mods'
     $modsRoot = (Resolve-Path $modsRoot).Path
-    $modOutDir = Join-Path $modsRoot $pckName
+    $modOutDir = Join-Path $modsRoot $DeployFolderName
     New-Item -ItemType Directory -Force -Path $modOutDir | Out-Null
 
     Copy-Item -Force $pckPath (Join-Path $modOutDir ("{0}.pck" -f $pckName))
@@ -164,4 +165,5 @@ if ($DeployToMods) {
 
     Write-Host "Deployed to:" $modOutDir
 }
+
 

@@ -24,4 +24,10 @@
       <Private>false</Private>
     </Reference>
   </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="sts2\**\*.cs" />
+    <None Include="sts2\**\*" />
+  </ItemGroup>
 </Project>
+
+

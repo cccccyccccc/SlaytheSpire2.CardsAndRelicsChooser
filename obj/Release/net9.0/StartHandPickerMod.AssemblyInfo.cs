@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("StartHandPickerMod")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+bb41de610d5782f67d6ab84577f3a4163b59fc6c")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ed138964d493f66514098a0f5a6759292b46dc82")]
 [assembly: System.Reflection.AssemblyProductAttribute("StartHandPickerMod")]
 [assembly: System.Reflection.AssemblyTitleAttribute("StartHandPickerMod")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
