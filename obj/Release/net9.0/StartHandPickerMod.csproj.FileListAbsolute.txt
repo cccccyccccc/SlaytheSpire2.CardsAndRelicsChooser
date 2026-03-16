@@ -15,3 +15,4 @@ D:\steam\steamapps\common\Slay the Spire 2\modproject\StartHandPickerMod\obj\Rel
 D:\steam\steamapps\common\Slay the Spire 2\modproject\StartHandPickerMod\obj\Release\net9.0\refint\StartHandPickerMod.dll
 D:\steam\steamapps\common\Slay the Spire 2\modproject\StartHandPickerMod\obj\Release\net9.0\StartHandPickerMod.pdb
 D:\steam\steamapps\common\Slay the Spire 2\modproject\StartHandPickerMod\obj\Release\net9.0\ref\StartHandPickerMod.dll
+D:\steam\steamapps\common\Slay the Spire 2\modproject\StartHandPickerMod\obj\Release\net9.0\StartHandPickerMod.sourcelink.json

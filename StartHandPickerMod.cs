@@ -5,16 +5,24 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Godot;
 using HarmonyLib;
+using MegaCrit.Sts2.Core.CardSelection;
 using MegaCrit.Sts2.Core.Commands;
+using MegaCrit.Sts2.Core.Context;
+using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.GameActions.Multiplayer;
 using MegaCrit.Sts2.Core.Logging;
+using MegaCrit.Sts2.Core.Localization;
 using MegaCrit.Sts2.Core.Modding;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
+using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
+using MegaCrit.Sts2.Core.Nodes.Screens.Capstones;
 using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
 using MegaCrit.Sts2.Core.Nodes.Screens.PauseMenu;
 using MegaCrit.Sts2.Core.Runs;
@@ -715,22 +723,23 @@ internal static class MainMenuUi
 [HarmonyPatch(typeof(NPauseMenu), "_Ready")]
 internal static class PauseMenuPatch
 {
-    private const string PauseMenuEntryName = "StartHandPickerPauseMenuEntry";
+    private const string AddEntryName = "StartHandPickerAddDeckCardEntry";
+    private const string RemoveEntryName = "StartHandPickerRemoveDeckCardEntry";
 
     public static void Postfix(NPauseMenu __instance)
     {
         try
         {
-            DeckPickerPanel.Attach(__instance, includeOpenButton: false);
-            AttachPauseMenuEntry(__instance);
+            AttachPauseMenuEntry(__instance, AddEntryName, "添加卡牌", () => LiveDeckEditor.OpenAddSelector());
+            AttachPauseMenuEntry(__instance, RemoveEntryName, "删除卡牌", () => LiveDeckEditor.OpenRemoveSelector());
         }
         catch (Exception ex)
         {
-            Log.Error($"Failed to attach in-run StartHandPicker UI: {ex.Message}");
+            Log.Error($"Failed to attach in-run deck editor UI: {ex.Message}");
         }
     }
 
-    private static void AttachPauseMenuEntry(NPauseMenu pauseMenu)
+    private static void AttachPauseMenuEntry(NPauseMenu pauseMenu, string nodeName, string text, Action onReleased)
     {
         var buttonContainer = pauseMenu.GetNodeOrNull<Control>("%ButtonContainer");
         if (buttonContainer == null)
@@ -738,22 +747,205 @@ internal static class PauseMenuPatch
             return;
         }
 
-        if (buttonContainer.GetNodeOrNull<Button>(PauseMenuEntryName) != null)
+        if (buttonContainer.GetNodeOrNull<NPauseMenuButton>(nodeName) != null)
         {
             return;
         }
 
-        var openButton = new Button
-        {
-            Name = PauseMenuEntryName,
-            Text = "开局牌库配置",
-            FocusMode = Control.FocusModeEnum.All,
-            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
-            CustomMinimumSize = new Vector2(0, 46)
-        };
+        var template = buttonContainer.GetNodeOrNull<NPauseMenuButton>("Resume")
+            ?? buttonContainer.GetNodeOrNull<NPauseMenuButton>("Settings")
+            ?? buttonContainer.GetChildren().OfType<NPauseMenuButton>().FirstOrDefault();
 
-        openButton.Pressed += () => DeckPickerPanel.Open(pauseMenu);
-        buttonContainer.AddChild(openButton);
+        if (template == null)
+        {
+            Log.Warn("Pause menu template button not found; cannot create styled deck editor entry.");
+            return;
+        }
+
+        var flags = Node.DuplicateFlags.Groups | Node.DuplicateFlags.Scripts | Node.DuplicateFlags.UseInstantiation;
+        if (template.Duplicate((int)flags) is not NPauseMenuButton newButton)
+        {
+            Log.Warn("Failed to duplicate pause menu button template for deck editor entry.");
+            return;
+        }
+
+        newButton.Name = nodeName;
+        newButton.FocusMode = Control.FocusModeEnum.All;
+        var labelNode = newButton.GetNodeOrNull<Node>("Label");
+        labelNode?.Call("SetTextAutoSize", text);
+
+        newButton.Connect(NClickableControl.SignalName.Released, Callable.From<NButton>(_ => onReleased()), 0U);
+        buttonContainer.AddChild(newButton);
+    }
+}
+
+internal static class LiveDeckEditor
+{
+    private static bool _isBusy;
+
+    public static void OpenAddSelector()
+    {
+        if (_isBusy)
+        {
+            Log.Warn("Deck editor is busy; ignoring add request.");
+            return;
+        }
+
+        ClosePauseMenu();
+        TaskHelper.RunSafely(AddCardFlow());
+    }
+
+    public static void OpenRemoveSelector()
+    {
+        if (_isBusy)
+        {
+            Log.Warn("Deck editor is busy; ignoring remove request.");
+            return;
+        }
+
+        ClosePauseMenu();
+        TaskHelper.RunSafely(RemoveCardFlow());
+    }
+
+    private static async Task AddCardFlow()
+    {
+        if (!TryGetLiveRunAndPlayer(out var state, out var player))
+        {
+            return;
+        }
+
+        _isBusy = true;
+        try
+        {
+            await Task.Yield();
+
+            var allCards = ModelDb.AllCards
+                .Where(c => c != null)
+                .OrderBy(c => c.Title, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(c => c.Id.Entry, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (allCards.Count == 0)
+            {
+                Log.Warn("No cards available in catalog; add action skipped.");
+                return;
+            }
+
+            var prefs = new CardSelectorPrefs(CardSelectorPrefs.TransformSelectionPrompt, 1)
+            {
+                Cancelable = true,
+                RequireManualConfirmation = true
+            };
+
+            var screen = NDeckUpgradeSelectScreen.ShowScreen(allCards, prefs, state);
+            var selected = (await screen.CardsSelected()).FirstOrDefault();
+            if (selected == null)
+            {
+                Log.Info("Add card canceled.");
+                return;
+            }
+
+            var created = state.CreateCard(selected, player);
+            created.FloorAddedToDeck = Math.Max(1, state.TotalFloor);
+            player.Deck.AddInternal(created, -1, false);
+            player.Deck.InvokeCardAddFinished();
+
+            Log.Info($"Added card to live deck: {selected.Id.Entry}, player={player.NetId}, deckCount={player.Deck.Cards.Count}");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Add card flow failed: {ex.Message}");
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private static async Task RemoveCardFlow()
+    {
+        if (!TryGetLiveRunAndPlayer(out var state, out var player))
+        {
+            return;
+        }
+
+        _isBusy = true;
+        try
+        {
+            await Task.Yield();
+
+            var deckCards = player.Deck.Cards.ToList();
+            if (deckCards.Count == 0)
+            {
+                Log.Warn("Deck is empty; remove action skipped.");
+                return;
+            }
+
+            var prefs = new CardSelectorPrefs(CardSelectorPrefs.RemoveSelectionPrompt, 1)
+            {
+                Cancelable = true,
+                RequireManualConfirmation = true
+            };
+
+            var screen = NDeckUpgradeSelectScreen.ShowScreen(deckCards, prefs, state);
+            var selected = (await screen.CardsSelected()).FirstOrDefault();
+            if (selected == null)
+            {
+                Log.Info("Remove card canceled.");
+                return;
+            }
+
+            selected.RemoveFromState();
+            if (state.ContainsCard(selected))
+            {
+                state.RemoveCard(selected);
+            }
+
+            Log.Info($"Removed card from live deck: {selected.Id.Entry}, player={player.NetId}, deckCount={player.Deck.Cards.Count}");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Remove card flow failed: {ex.Message}");
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private static bool TryGetLiveRunAndPlayer(out RunState state, out Player player)
+    {
+        var currentState = RunManager.Instance.DebugOnlyGetState();
+        if (currentState == null)
+        {
+            Log.Warn("Run state unavailable; deck editor action ignored.");
+            state = null!;
+            player = null!;
+            return false;
+        }
+
+        state = currentState;
+
+        player = LocalContext.GetMe(state.Players) ?? state.Players.FirstOrDefault()!;
+        if (player == null)
+        {
+            Log.Warn("No player found in run state; deck editor action ignored.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static void ClosePauseMenu()
+    {
+        try
+        {
+            NCapstoneContainer.Instance?.Close();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Failed to close pause menu before deck edit: {ex.Message}");
+        }
     }
 }
 
@@ -761,7 +953,7 @@ internal static class RunStartHooks
 {
     public static void Mark(string source)
     {
-        RuntimeState.MarkRunStarted(source);
+        RuntimeState.ClearPending($"disabled-runtime-edit-mode:{source}");
     }
 }
 
@@ -780,7 +972,7 @@ internal static class RunManagerSetUpNewSinglePlayerPatch
     public static void Postfix(RunState state)
     {
         RunStartHooks.Mark(nameof(RunManager.SetUpNewSinglePlayer));
-        StartHandApplier.TryApplyToRun(state, nameof(RunManager.SetUpNewSinglePlayer));
+        // Start-hand rebuild disabled: deck edits are now done in-run via LiveDeckEditor.
     }
 }
 
@@ -790,7 +982,7 @@ internal static class RunManagerSetUpNewMultiPlayerPatch
     public static void Postfix(RunState state)
     {
         RunStartHooks.Mark(nameof(RunManager.SetUpNewMultiPlayer));
-        StartHandApplier.TryApplyToRun(state, nameof(RunManager.SetUpNewMultiPlayer));
+        // Start-hand rebuild disabled: deck edits are now done in-run via LiveDeckEditor.
     }
 }
 
@@ -867,6 +1059,14 @@ internal static class Log
         }
     }
 }
+
+
+
+
+
+
+
+
 
 
 
