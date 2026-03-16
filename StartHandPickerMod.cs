@@ -20,7 +20,12 @@ using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Localization;
 using MegaCrit.Sts2.Core.Modding;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Nodes;
+using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
+using MegaCrit.Sts2.Core.Nodes.Screens;
+using MegaCrit.Sts2.Core.Nodes.Screens.CardLibrary;
+using MegaCrit.Sts2.Core.Nodes.Screens.Overlays;
 using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
 using MegaCrit.Sts2.Core.Nodes.Screens.Capstones;
 using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
@@ -782,6 +787,9 @@ internal static class PauseMenuPatch
 internal static class LiveDeckEditor
 {
     private static bool _isBusy;
+    private static bool _awaitingCardLibraryPick;
+    private static RunState? _pendingAddState;
+    private static ulong _pendingAddPlayerNetId;
 
     public static void OpenAddSelector()
     {
@@ -791,8 +799,18 @@ internal static class LiveDeckEditor
             return;
         }
 
-        ClosePauseMenu();
-        TaskHelper.RunSafely(AddCardFlow());
+        if (!TryGetLiveRunAndPlayer(out var state, out var player))
+        {
+            return;
+        }
+
+        _isBusy = true;
+        BeginCardLibraryPick(state, player);
+
+        if (!TryOpenCardLibraryPicker(state))
+        {
+            ClearCardLibraryPick("open_failed");
+        }
     }
 
     public static void OpenRemoveSelector()
@@ -807,59 +825,54 @@ internal static class LiveDeckEditor
         TaskHelper.RunSafely(RemoveCardFlow());
     }
 
-    private static async Task AddCardFlow()
+    public static bool TryHandleCardLibrarySelection(NCardHolder? holder)
     {
-        if (!TryGetLiveRunAndPlayer(out var state, out var player))
+        if (!_awaitingCardLibraryPick)
         {
-            return;
+            return false;
         }
 
-        _isBusy = true;
+        if (holder?.CardModel == null)
+        {
+            Log.Warn("Card library selection was empty while add-picker was active.");
+            ClearCardLibraryPick("empty_selection");
+            return true;
+        }
+
+        if (!TryResolvePendingAddContext(out var state, out var player))
+        {
+            Log.Warn("Card library add-picker lost run/player context.");
+            ClearCardLibraryPick("missing_context");
+            return true;
+        }
+
         try
         {
-            await Task.Yield();
-
-            var allCards = ModelDb.AllCards
-                .Where(c => c != null)
-                .OrderBy(c => c.Title, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(c => c.Id.Entry, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            if (allCards.Count == 0)
-            {
-                Log.Warn("No cards available in catalog; add action skipped.");
-                return;
-            }
-
-            var prefs = new CardSelectorPrefs(CardSelectorPrefs.TransformSelectionPrompt, 1)
-            {
-                Cancelable = true,
-                RequireManualConfirmation = true
-            };
-
-            var screen = NDeckUpgradeSelectScreen.ShowScreen(allCards, prefs, state);
-            var selected = (await screen.CardsSelected()).FirstOrDefault();
-            if (selected == null)
-            {
-                Log.Info("Add card canceled.");
-                return;
-            }
-
+            var selected = holder.CardModel;
             var created = state.CreateCard(selected, player);
             created.FloorAddedToDeck = Math.Max(1, state.TotalFloor);
             player.Deck.AddInternal(created, -1, false);
             player.Deck.InvokeCardAddFinished();
 
-            Log.Info($"Added card to live deck: {selected.Id.Entry}, player={player.NetId}, deckCount={player.Deck.Cards.Count}");
+            Log.Info($"Added card via card library: {selected.Id.Entry}, player={player.NetId}, deckCount={player.Deck.Cards.Count}");
         }
         catch (Exception ex)
         {
-            Log.Error($"Add card flow failed: {ex.Message}");
+            Log.Error($"Failed to add selected card from card library: {ex.Message}");
         }
-        finally
+
+        return true;
+    }
+
+    public static void NotifyCardLibraryClosed()
+    {
+        if (!_awaitingCardLibraryPick)
         {
-            _isBusy = false;
+            return;
         }
+
+        Log.Info("Card library closed; exiting continuous add mode.");
+        ClearCardLibraryPick("library_closed");
     }
 
     private static async Task RemoveCardFlow()
@@ -881,27 +894,47 @@ internal static class LiveDeckEditor
                 return;
             }
 
-            var prefs = new CardSelectorPrefs(CardSelectorPrefs.RemoveSelectionPrompt, 1)
+            var prefs = new CardSelectorPrefs(CardSelectorPrefs.RemoveSelectionPrompt, 1, deckCards.Count)
             {
                 Cancelable = true,
                 RequireManualConfirmation = true
             };
 
-            var screen = NDeckUpgradeSelectScreen.ShowScreen(deckCards, prefs, state);
-            var selected = (await screen.CardsSelected()).FirstOrDefault();
-            if (selected == null)
+            var screen = NDeckCardSelectScreen.Create(deckCards, prefs);
+            var overlayStack = NOverlayStack.Instance;
+            if (overlayStack == null)
+            {
+                Log.Warn("Overlay stack unavailable; remove action skipped.");
+                return;
+            }
+
+            overlayStack.Push(screen);
+
+            var selectedCards = (await screen.CardsSelected())
+                .Where(c => c != null)
+                .Distinct()
+                .ToList();
+
+            if (selectedCards.Count == 0)
             {
                 Log.Info("Remove card canceled.");
                 return;
             }
 
-            selected.RemoveFromState();
-            if (state.ContainsCard(selected))
+            var removed = 0;
+            foreach (var selected in selectedCards)
             {
-                state.RemoveCard(selected);
+                selected.RemoveFromState();
+                if (state.ContainsCard(selected))
+                {
+                    state.RemoveCard(selected);
+                }
+
+                removed++;
+                Log.Info($"Removed card from live deck: {selected.Id.Entry}, player={player.NetId}, deckCount={player.Deck.Cards.Count}");
             }
 
-            Log.Info($"Removed card from live deck: {selected.Id.Entry}, player={player.NetId}, deckCount={player.Deck.Cards.Count}");
+            Log.Info($"Removed {removed} card(s) from live deck in one operation, player={player.NetId}, deckCount={player.Deck.Cards.Count}");
         }
         catch (Exception ex)
         {
@@ -936,16 +969,123 @@ internal static class LiveDeckEditor
         return true;
     }
 
+    private static void BeginCardLibraryPick(RunState state, Player player)
+    {
+        _pendingAddState = state;
+        _pendingAddPlayerNetId = player.NetId;
+        _awaitingCardLibraryPick = true;
+    }
+
+    private static bool TryOpenCardLibraryPicker(RunState state)
+    {
+        try
+        {
+            var globalUi = NRun.Instance?.GlobalUi;
+            var capstoneSubmenuStack = globalUi?.SubmenuStack;
+            if (capstoneSubmenuStack == null)
+            {
+                Log.Warn("Submenu stack unavailable; cannot open card library picker.");
+                return false;
+            }
+
+            if (NCapstoneContainer.Instance?.CurrentCapstoneScreen != capstoneSubmenuStack)
+            {
+                if (capstoneSubmenuStack.ShowScreen(CapstoneSubmenuType.PauseMenu) is NPauseMenu pauseMenu)
+                {
+                    pauseMenu.Initialize(state);
+                }
+            }
+
+            var stack = capstoneSubmenuStack.Stack;
+            if (stack == null)
+            {
+                Log.Warn("Run submenu stack unavailable; cannot open card library picker.");
+                return false;
+            }
+
+            if (stack.Peek() is not NPauseMenu)
+            {
+                var pauseMenu = stack.GetSubmenuType<NPauseMenu>();
+                pauseMenu.Initialize(state);
+                stack.Push(pauseMenu);
+            }
+
+            var cardLibrary = stack.GetSubmenuType<NCardLibrary>();
+            cardLibrary.Initialize(state);
+            stack.Push(cardLibrary);
+
+            Log.Info("Opened add-card picker using in-run card library (return goes back to pause menu).");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Failed to open card library add-picker: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static bool TryResolvePendingAddContext(out RunState state, out Player player)
+    {
+        state = _pendingAddState ?? RunManager.Instance.DebugOnlyGetState()!;
+        if (state == null)
+        {
+            player = null!;
+            return false;
+        }
+
+        player = state.Players.FirstOrDefault(p => p.NetId == _pendingAddPlayerNetId)
+            ?? LocalContext.GetMe(state.Players)
+            ?? state.Players.FirstOrDefault()!;
+        if (player == null)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static void ClearCardLibraryPick(string reason)
+    {
+        if (_awaitingCardLibraryPick)
+        {
+            Log.Info($"Cleared card library add-picker context: {reason}");
+        }
+
+        _awaitingCardLibraryPick = false;
+        _pendingAddState = null;
+        _pendingAddPlayerNetId = 0;
+        _isBusy = false;
+    }
+
     private static void ClosePauseMenu()
     {
         try
         {
             NCapstoneContainer.Instance?.Close();
+            NRun.Instance?.GlobalUi?.TopBar?.Pause?.ToggleAnimState();
         }
         catch (Exception ex)
         {
             Log.Warn($"Failed to close pause menu before deck edit: {ex.Message}");
         }
+    }
+}
+
+[HarmonyPatch(typeof(NCardLibrary), "ShowCardDetail")]
+internal static class CardLibraryShowCardDetailPatch
+{
+    public static bool Prefix(NCardHolder holder)
+    {
+        return !LiveDeckEditor.TryHandleCardLibrarySelection(holder);
+    }
+}
+
+[HarmonyPatch(typeof(NCardLibrary), nameof(NCardLibrary.OnSubmenuClosed))]
+internal static class CardLibraryOnSubmenuClosedPatch
+{
+    public static void Postfix()
+    {
+        LiveDeckEditor.NotifyCardLibraryClosed();
     }
 }
 
@@ -1059,6 +1199,11 @@ internal static class Log
         }
     }
 }
+
+
+
+
+
 
 
 
