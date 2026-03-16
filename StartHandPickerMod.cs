@@ -737,11 +737,60 @@ internal static class PauseMenuPatch
         {
             AttachPauseMenuEntry(__instance, AddEntryName, "添加卡牌", () => LiveDeckEditor.OpenAddSelector());
             AttachPauseMenuEntry(__instance, RemoveEntryName, "删除卡牌", () => LiveDeckEditor.OpenRemoveSelector());
+            ApplyButtonLayout(__instance);
         }
         catch (Exception ex)
         {
             Log.Error($"Failed to attach in-run deck editor UI: {ex.Message}");
         }
+    }
+
+    public static void ApplyButtonLayout(NPauseMenu pauseMenu)
+    {
+        var buttonContainer = pauseMenu.GetNodeOrNull<Control>("%ButtonContainer");
+        if (buttonContainer == null)
+        {
+            return;
+        }
+
+        var desiredOrder = new[]
+        {
+            "Resume",
+            "Settings",
+            "Compendium",
+            AddEntryName,
+            RemoveEntryName,
+            "Disconnect",
+            "GiveUp",
+            "SaveAndQuit"
+        };
+
+        var targetIndex = 0;
+        foreach (var name in desiredOrder)
+        {
+            var button = buttonContainer.GetNodeOrNull<NPauseMenuButton>(name);
+            if (button == null)
+            {
+                continue;
+            }
+
+            buttonContainer.MoveChild(button, Math.Min(targetIndex, buttonContainer.GetChildCount(false) - 1));
+            targetIndex++;
+        }
+
+        foreach (var button in buttonContainer.GetChildren().OfType<NPauseMenuButton>().ToList())
+        {
+            var buttonName = button.Name.ToString();
+            if (desiredOrder.Contains(buttonName, StringComparer.Ordinal))
+            {
+                continue;
+            }
+
+            buttonContainer.MoveChild(button, Math.Min(targetIndex, buttonContainer.GetChildCount(false) - 1));
+            targetIndex++;
+        }
+
+        RebuildFocusNeighbors(buttonContainer);
     }
 
     private static void AttachPauseMenuEntry(NPauseMenu pauseMenu, string nodeName, string text, Action onReleased)
@@ -782,12 +831,40 @@ internal static class PauseMenuPatch
         newButton.Connect(NClickableControl.SignalName.Released, Callable.From<NButton>(_ => onReleased()), 0U);
         buttonContainer.AddChild(newButton);
     }
+
+    private static void RebuildFocusNeighbors(Control buttonContainer)
+    {
+        var buttons = buttonContainer
+            .GetChildren()
+            .OfType<NPauseMenuButton>()
+            .Where(b => b.Visible)
+            .ToList();
+
+        for (var i = 0; i < buttons.Count; i++)
+        {
+            var button = buttons[i];
+            button.FocusNeighborLeft = button.GetPath();
+            button.FocusNeighborRight = button.GetPath();
+            button.FocusNeighborTop = (i > 0) ? buttons[i - 1].GetPath() : button.GetPath();
+            button.FocusNeighborBottom = (i < buttons.Count - 1) ? buttons[i + 1].GetPath() : button.GetPath();
+        }
+    }
+}
+
+[HarmonyPatch(typeof(NPauseMenu), nameof(NPauseMenu.Initialize))]
+internal static class PauseMenuInitializePatch
+{
+    public static void Postfix(NPauseMenu __instance)
+    {
+        PauseMenuPatch.ApplyButtonLayout(__instance);
+    }
 }
 
 internal static class LiveDeckEditor
 {
     private static bool _isBusy;
     private static bool _awaitingCardLibraryPick;
+    private static bool _navigationUiForcedVisible;
     private static RunState? _pendingAddState;
     private static ulong _pendingAddPlayerNetId;
 
@@ -825,7 +902,7 @@ internal static class LiveDeckEditor
         TaskHelper.RunSafely(RemoveCardFlow());
     }
 
-    public static bool TryHandleCardLibrarySelection(NCardHolder? holder)
+    public static bool TryHandleCardLibrarySelection(NCardLibrary? library, NCardHolder? holder)
     {
         if (!_awaitingCardLibraryPick)
         {
@@ -846,15 +923,22 @@ internal static class LiveDeckEditor
             return true;
         }
 
+        var addUpgraded = IsAddUpgradedEnabled(library);
+
         try
         {
             var selected = holder.CardModel;
             var created = state.CreateCard(selected, player);
+            if (addUpgraded && !created.IsUpgraded)
+            {
+                created.UpgradeInternal();
+            }
+
             created.FloorAddedToDeck = Math.Max(1, state.TotalFloor);
             player.Deck.AddInternal(created, -1, false);
             player.Deck.InvokeCardAddFinished();
 
-            Log.Info($"Added card via card library: {selected.Id.Entry}, player={player.NetId}, deckCount={player.Deck.Cards.Count}");
+            Log.Info($"Added card via card library: {selected.Id.Entry}, upgraded={addUpgraded}, player={player.NetId}, deckCount={player.Deck.Cards.Count}");
         }
         catch (Exception ex)
         {
@@ -862,6 +946,16 @@ internal static class LiveDeckEditor
         }
 
         return true;
+    }
+
+    public static void NotifyCardLibraryOpened()
+    {
+        if (!_awaitingCardLibraryPick)
+        {
+            return;
+        }
+
+        ShowNavigationUiForSelection();
     }
 
     public static void NotifyCardLibraryClosed()
@@ -921,20 +1015,28 @@ internal static class LiveDeckEditor
                 return;
             }
 
-            var removed = 0;
-            foreach (var selected in selectedCards)
+            try
             {
-                selected.RemoveFromState();
-                if (state.ContainsCard(selected))
+                await CardPileCmd.RemoveFromDeck(selectedCards, showPreview: true);
+                Log.Info($"Removed {selectedCards.Count} card(s) from live deck with visuals, player={player.NetId}, deckCount={player.Deck.Cards.Count}");
+            }
+            catch (Exception visualEx)
+            {
+                Log.Warn($"Visual remove failed, falling back to direct removal: {visualEx.Message}");
+                var removed = 0;
+                foreach (var selected in selectedCards)
                 {
-                    state.RemoveCard(selected);
+                    selected.RemoveFromState();
+                    if (state.ContainsCard(selected))
+                    {
+                        state.RemoveCard(selected);
+                    }
+
+                    removed++;
                 }
 
-                removed++;
-                Log.Info($"Removed card from live deck: {selected.Id.Entry}, player={player.NetId}, deckCount={player.Deck.Cards.Count}");
+                Log.Info($"Removed {removed} card(s) from live deck via fallback, player={player.NetId}, deckCount={player.Deck.Cards.Count}");
             }
-
-            Log.Info($"Removed {removed} card(s) from live deck in one operation, player={player.NetId}, deckCount={player.Deck.Cards.Count}");
         }
         catch (Exception ex)
         {
@@ -1014,6 +1116,7 @@ internal static class LiveDeckEditor
             cardLibrary.Initialize(state);
             stack.Push(cardLibrary);
 
+            ShowNavigationUiForSelection();
             Log.Info("Opened add-card picker using in-run card library (return goes back to pause menu).");
             return true;
         }
@@ -1051,12 +1154,70 @@ internal static class LiveDeckEditor
             Log.Info($"Cleared card library add-picker context: {reason}");
         }
 
+        HideNavigationUiForSelection();
         _awaitingCardLibraryPick = false;
         _pendingAddState = null;
         _pendingAddPlayerNetId = 0;
         _isBusy = false;
     }
 
+    private static bool IsAddUpgradedEnabled(NCardLibrary? library)
+    {
+        try
+        {
+            return library?.GetNodeOrNull<NLibraryStatTickbox>("%Upgrades")?.IsTicked ?? false;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Failed to read 'add upgraded' toggle state: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static void ShowNavigationUiForSelection()
+    {
+        if (_navigationUiForcedVisible)
+        {
+            return;
+        }
+
+        try
+        {
+            var globalUi = NRun.Instance?.GlobalUi;
+            globalUi?.TopBar?.AnimShow();
+            globalUi?.RelicInventory?.AnimShow();
+            globalUi?.MultiplayerPlayerContainer?.AnimShow();
+            _navigationUiForcedVisible = true;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Failed to show navigation UI for card selection: {ex.Message}");
+        }
+    }
+
+    private static void HideNavigationUiForSelection()
+    {
+        if (!_navigationUiForcedVisible)
+        {
+            return;
+        }
+
+        try
+        {
+            var globalUi = NRun.Instance?.GlobalUi;
+            globalUi?.TopBar?.AnimHide();
+            globalUi?.RelicInventory?.AnimHide();
+            globalUi?.MultiplayerPlayerContainer?.AnimHide();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Failed to restore navigation UI after card selection: {ex.Message}");
+        }
+        finally
+        {
+            _navigationUiForcedVisible = false;
+        }
+    }
     private static void ClosePauseMenu()
     {
         try
@@ -1071,12 +1232,37 @@ internal static class LiveDeckEditor
     }
 }
 
+[HarmonyPatch(typeof(NCardLibrary), "_Ready")]
+internal static class CardLibraryReadyPatch
+{
+    public static void Postfix(NCardLibrary __instance)
+    {
+        try
+        {
+            __instance.GetNodeOrNull<NLibraryStatTickbox>("%Upgrades")?.SetLabel("加入升级版");
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Failed to relabel card library upgrades toggle: {ex.Message}");
+        }
+    }
+}
+
 [HarmonyPatch(typeof(NCardLibrary), "ShowCardDetail")]
 internal static class CardLibraryShowCardDetailPatch
 {
-    public static bool Prefix(NCardHolder holder)
+    public static bool Prefix(NCardLibrary __instance, NCardHolder holder)
     {
-        return !LiveDeckEditor.TryHandleCardLibrarySelection(holder);
+        return !LiveDeckEditor.TryHandleCardLibrarySelection(__instance, holder);
+    }
+}
+
+[HarmonyPatch(typeof(NCardLibrary), nameof(NCardLibrary.OnSubmenuOpened))]
+internal static class CardLibraryOnSubmenuOpenedPatch
+{
+    public static void Postfix()
+    {
+        LiveDeckEditor.NotifyCardLibraryOpened();
     }
 }
 
@@ -1199,6 +1385,14 @@ internal static class Log
         }
     }
 }
+
+
+
+
+
+
+
+
 
 
 
