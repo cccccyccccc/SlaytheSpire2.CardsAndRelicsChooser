@@ -1,0 +1,30 @@
+# Build outputs
+bin/
+obj/
+dist/
+artifacts/
+TestResults/
+
+# Local .NET caches
+.dotnet/
+.nuget/
+
+# IDE/editor files
+.vs/
+.idea/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.rsuser
+
+# Logs/temp
+*.log
+*.tmp
+*.cache
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store

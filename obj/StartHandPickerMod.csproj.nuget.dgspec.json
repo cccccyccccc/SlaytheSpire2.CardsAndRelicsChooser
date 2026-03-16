@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "D:\\Codes_Works\\Projects\\Project10_modding\\StartHandPickerMod\\StartHandPickerMod.csproj": {}
+    "D:\\steam\\steamapps\\common\\Slay the Spire 2\\modproject\\StartHandPickerMod\\StartHandPickerMod.csproj": {}
   },
   "projects": {
-    "D:\\Codes_Works\\Projects\\Project10_modding\\StartHandPickerMod\\StartHandPickerMod.csproj": {
+    "D:\\steam\\steamapps\\common\\Slay the Spire 2\\modproject\\StartHandPickerMod\\StartHandPickerMod.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "D:\\Codes_Works\\Projects\\Project10_modding\\StartHandPickerMod\\StartHandPickerMod.csproj",
+        "projectUniqueName": "D:\\steam\\steamapps\\common\\Slay the Spire 2\\modproject\\StartHandPickerMod\\StartHandPickerMod.csproj",
         "projectName": "StartHandPickerMod",
-        "projectPath": "D:\\Codes_Works\\Projects\\Project10_modding\\StartHandPickerMod\\StartHandPickerMod.csproj",
-        "packagesPath": "C:\\Users\\21023\\.nuget\\packages\\",
-        "outputPath": "D:\\Codes_Works\\Projects\\Project10_modding\\StartHandPickerMod\\obj\\",
+        "projectPath": "D:\\steam\\steamapps\\common\\Slay the Spire 2\\modproject\\StartHandPickerMod\\StartHandPickerMod.csproj",
+        "packagesPath": "D:\\steam\\steamapps\\common\\Slay the Spire 2\\modproject\\StartHandPickerMod\\.nuget\\packages\\",
+        "outputPath": "D:\\steam\\steamapps\\common\\Slay the Spire 2\\modproject\\StartHandPickerMod\\obj\\",
         "projectStyle": "PackageReference",
         "fallbackFolders": [
           "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"

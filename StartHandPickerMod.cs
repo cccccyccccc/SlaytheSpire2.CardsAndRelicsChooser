@@ -640,9 +640,19 @@ internal static class MainMenuPatch
     }
 }
 
-[HarmonyPatch(typeof(RunManager), nameof(RunManager.InitializeNewRun))]
+[HarmonyPatch]
 internal static class RunManagerPatch
 {
+    private static MethodBase? TargetMethod()
+    {
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        var runManagerType = typeof(RunManager);
+
+        return runManagerType.GetMethod("InitializeNewRun", flags)
+            ?? runManagerType.GetMethod("SetUpNewSinglePlayer", flags)
+            ?? runManagerType.GetMethod("SetUpNewMultiPlayer", flags);
+    }
+
     public static void Postfix()
     {
         RuntimeState.MarkRunStarted();
@@ -668,9 +678,12 @@ internal static class DrawPatch
 
 internal static class Log
 {
-    public static void Info(string message) => Logger.Info($"[StartHandPickerMod] {message}", 0);
+    public static void Info(string message) => GD.Print($"[StartHandPickerMod] {message}");
 
-    public static void Warn(string message) => Logger.Warn($"[StartHandPickerMod] {message}", 0);
+    public static void Warn(string message) => GD.Print($"[StartHandPickerMod][WARN] {message}");
 
-    public static void Error(string message) => Logger.Error($"[StartHandPickerMod] {message}", 0);
+    public static void Error(string message) => GD.PrintErr($"[StartHandPickerMod][ERROR] {message}");
 }
+
+
+
