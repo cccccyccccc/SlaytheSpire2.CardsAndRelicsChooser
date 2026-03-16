@@ -1,0 +1,7 @@
+{
+  "pck_name": "StartHandPickerMod",
+  "name": "StartHandPickerMod",
+  "author": "local-dev",
+  "description": "Choose exact starting hand cards (from all cards) and counts before starting a run.",
+  "version": "0.1.0"
+}

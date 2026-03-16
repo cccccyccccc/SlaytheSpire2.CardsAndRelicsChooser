@@ -1,0 +1,5 @@
+D:\Codes_Works\Projects\Project10_modding\StartHandPickerMod\obj\Release\net9.0\StartHandPickerMod.GeneratedMSBuildEditorConfig.editorconfig
+D:\Codes_Works\Projects\Project10_modding\StartHandPickerMod\obj\Release\net9.0\StartHandPickerMod.AssemblyInfoInputs.cache
+D:\Codes_Works\Projects\Project10_modding\StartHandPickerMod\obj\Release\net9.0\StartHandPickerMod.AssemblyInfo.cs
+D:\Codes_Works\Projects\Project10_modding\StartHandPickerMod\obj\Release\net9.0\StartHandPickerMod.csproj.CoreCompileInputs.cache
+D:\Codes_Works\Projects\Project10_modding\StartHandPickerMod\obj\Release\net9.0\StartHandPickerMod.csproj.AssemblyReference.cache
