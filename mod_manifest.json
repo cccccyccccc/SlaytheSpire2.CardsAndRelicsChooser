@@ -1,7 +1,9 @@
 {
-  "pck_name": "StartHandPickerMod",
-  "name": "StartHandPickerMod",
+  "pck_name": "CardsAndRelicsChooser",
+  "name": "CardsAndRelicsChooser",
   "author": "local-dev",
-  "description": "Choose exact starting hand cards (from all cards) and counts before starting a run.",
+  "description": "Edit cards and relics during a run with native in-game selection UI.",
   "version": "0.1.0"
 }
+
+

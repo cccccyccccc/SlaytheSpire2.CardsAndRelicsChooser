@@ -4,8 +4,8 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>StartHandPickerMod</AssemblyName>
-    <RootNamespace>StartHandPickerMod</RootNamespace>
+    <AssemblyName>CardsAndRelicsChooser</AssemblyName>
+    <RootNamespace>CardsAndRelicsChooser</RootNamespace>
 
     <Sts2GameDir>D:\steam\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64</Sts2GameDir>
   </PropertyGroup>
@@ -29,5 +29,7 @@
     <None Include="sts2\**\*" />
   </ItemGroup>
 </Project>
+
+
 
 
