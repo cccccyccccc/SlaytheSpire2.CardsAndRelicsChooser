@@ -2,13 +2,7 @@
 
 ## Feature
 
-- You can add and delete cards and relics in your game.   (Relics waited to be add later, now you can deal with cards.)
-
-![button](./imgs/button.jpg)
-
-- Below is the add page.
-
-![add](./imgs/add.jpg)
+- You can add and delete cards and relics in your game with this mod.
   
 ## How to use it
 

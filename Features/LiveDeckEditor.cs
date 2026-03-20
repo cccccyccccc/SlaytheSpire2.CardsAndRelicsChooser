@@ -14,6 +14,7 @@ using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
+using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
 using MegaCrit.Sts2.Core.Nodes.Relics;
 using MegaCrit.Sts2.Core.Nodes.Screens;
 using MegaCrit.Sts2.Core.Nodes.Screens.CardLibrary;
@@ -41,9 +42,12 @@ internal static class LiveDeckEditor
     private static NChooseARelicSelection? _activeRelicMultiSelectScreen;
     private static readonly HashSet<ulong> _selectedRelicHolderIds = new();
     private static readonly Dictionary<ulong, RelicWheelScrollState> _relicWheelScrollByScreenId = new();
+    private static readonly HashSet<ulong> _removeCardSelectionScreenIds = new();
+    private static readonly HashSet<ulong> _enchantCardSelectionScreenIds = new();
     private const string RelicSelectionBannerText = "选择你要删除的遗物";
     private const string RelicWheelHintText = "滚轮滑动可左右查看";
     private const string RelicWheelHintNodeName = "StartHandPickerRelicWheelHint";
+    private const string RelicBackButtonNodeName = "StartHandPickerRelicBackButton";
 
     public static void OpenAddCardSelector()
     {
@@ -79,6 +83,18 @@ internal static class LiveDeckEditor
 
         ClosePauseMenu();
         TaskHelper.RunSafely(RemoveCardFlow());
+    }
+
+    public static void OpenEnchantCardSelector()
+    {
+        if (_isBusy)
+        {
+            Log.Warn("Editor is busy; ignoring enchant-card request.");
+            return;
+        }
+
+        ClosePauseMenu();
+        TaskHelper.RunSafely(EnchantCardFlow());
     }
 
     public static void OpenAddRelicSelector()
@@ -215,6 +231,7 @@ internal static class LiveDeckEditor
         _pendingRestoreAfterDeckView = false;
         Log.Info("Card library closed; exiting continuous add-card mode.");
         ClearSelectionContext("card_library_closed");
+        CloseCapstonePickerIfPresent("card_library_closed_return_to_run");
     }
 
     public static void NotifyRelicCollectionOpened()
@@ -236,6 +253,7 @@ internal static class LiveDeckEditor
 
         Log.Info("Relic collection closed; exiting continuous add-relic mode.");
         ClearSelectionContext("relic_collection_closed");
+        CloseCapstonePickerIfPresent("relic_collection_closed_return_to_run");
     }
 
     public static void NotifyDeckViewOpenRequested()
@@ -287,6 +305,158 @@ internal static class LiveDeckEditor
         ClearSelectionContext("deck_view_restore_failed");
     }
 
+    private static async Task EnchantCardFlow()
+    {
+        if (!TryGetLiveRunAndPlayer(out _, out var player))
+        {
+            return;
+        }
+
+        _isBusy = true;
+        try
+        {
+            await Task.Yield();
+
+            while (true)
+            {
+                if (!TryGetLiveRunAndPlayer(out _, out player))
+                {
+                    Log.Warn("Run state became unavailable during enchant-card flow.");
+                    return;
+                }
+
+                var deckCards = player.Deck.Cards.ToList();
+                if (deckCards.Count == 0)
+                {
+                    Log.Warn("Deck is empty; enchant-card action skipped.");
+                    return;
+                }
+
+                var prefs = new CardSelectorPrefs(CardSelectorPrefs.EnchantSelectionPrompt, 1, 1)
+                {
+                    Cancelable = true,
+                    RequireManualConfirmation = true
+                };
+
+                NDeckCardSelectScreen? screen = null;
+                CardModel? selectedCard;
+                try
+                {
+                    screen = NDeckCardSelectScreen.Create(deckCards, prefs);
+                    RegisterEnchantCardSelectionScreen(screen);
+
+                    var overlayStack = NOverlayStack.Instance;
+                    if (overlayStack == null)
+                    {
+                        Log.Warn("Overlay stack unavailable; enchant-card action skipped.");
+                        return;
+                    }
+
+                    overlayStack.Push(screen);
+
+                    selectedCard = (await screen.CardsSelected())
+                        .Where(c => c != null)
+                        .FirstOrDefault();
+                }
+                finally
+                {
+                    UnregisterEnchantCardSelectionScreen(screen);
+                }
+
+                if (selectedCard == null)
+                {
+                    Log.Info("Enchant-card canceled.");
+                    return;
+                }
+
+                var availableEnchantments = GetAvailableEnchantments(selectedCard);
+                if (availableEnchantments.Count == 0)
+                {
+                    Log.Warn($"No applicable enchantments for card {selectedCard.Id.Entry}; returning to card picker.");
+                    continue;
+                }
+
+                var selectedEnchantment = await EnchantmentPickerOverlay.Show(selectedCard, availableEnchantments);
+                if (selectedEnchantment == null)
+                {
+                    Log.Info("Enchant effect selection canceled; returning to card picker.");
+                    continue;
+                }
+
+                try
+                {
+                    var applied = CardCmd.Enchant(selectedEnchantment.ToMutable(), selectedCard, 1m);
+                    Log.Info($"Enchanted card: card={selectedCard.Id.Entry}, enchantment={(applied?.Id.Entry ?? selectedEnchantment.Id.Entry)}, player={player.NetId}");
+                }
+                catch (Exception enchantEx)
+                {
+                    Log.Warn($"Failed to enchant selected card {selectedCard.Id.Entry} with {selectedEnchantment.Id.Entry}: {enchantEx.Message}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Enchant-card flow failed: {ex.Message}");
+        }
+        finally
+        {
+            EnchantmentPickerOverlay.CloseIfOpen();
+            _isBusy = false;
+        }
+    }
+
+    private static List<EnchantmentModel> GetAvailableEnchantments(CardModel card)
+    {
+        var candidates = new List<EnchantmentModel>();
+        var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var enchantment in ModelDb.DebugEnchantments)
+        {
+            if (enchantment == null)
+            {
+                continue;
+            }
+
+            var type = enchantment.GetType();
+            if (type.Namespace?.Contains(".Mocks", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                continue;
+            }
+
+            if (string.Equals(type.Name, "DeprecatedEnchantment", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!enchantment.CanEnchant(card))
+            {
+                continue;
+            }
+
+            if (!seenIds.Add(enchantment.Id.Entry))
+            {
+                continue;
+            }
+
+            candidates.Add(enchantment);
+        }
+
+        candidates.Sort(static (a, b) => string.Compare(GetEnchantmentDisplayName(a), GetEnchantmentDisplayName(b), StringComparison.OrdinalIgnoreCase));
+        return candidates;
+    }
+
+    private static string GetEnchantmentDisplayName(EnchantmentModel enchantment)
+    {
+        try
+        {
+            return enchantment.Title.GetFormattedText();
+        }
+        catch
+        {
+            return enchantment.Id.Entry;
+        }
+    }
+
     private static async Task RemoveCardFlow()
     {
         if (!TryGetLiveRunAndPlayer(out var state, out var player))
@@ -295,6 +465,7 @@ internal static class LiveDeckEditor
         }
 
         _isBusy = true;
+        NDeckCardSelectScreen? screen = null;
         try
         {
             await Task.Yield();
@@ -312,7 +483,8 @@ internal static class LiveDeckEditor
                 RequireManualConfirmation = true
             };
 
-            var screen = NDeckCardSelectScreen.Create(deckCards, prefs);
+            screen = NDeckCardSelectScreen.Create(deckCards, prefs);
+            RegisterRemoveCardSelectionScreen(screen);
             var overlayStack = NOverlayStack.Instance;
             if (overlayStack == null)
             {
@@ -362,6 +534,7 @@ internal static class LiveDeckEditor
         }
         finally
         {
+            UnregisterRemoveCardSelectionScreen(screen);
             _isBusy = false;
         }
     }
@@ -614,6 +787,81 @@ internal static class LiveDeckEditor
     }
 
 
+    internal static void RegisterRemoveCardSelectionScreen(NDeckCardSelectScreen screen)
+    {
+        var screenId = screen.GetInstanceId();
+        if (_removeCardSelectionScreenIds.Add(screenId))
+        {
+            Log.Info($"Registered remove-card selector screen: id={screenId}");
+        }
+    }
+
+    internal static bool IsRemoveCardSelectionScreen(NDeckCardSelectScreen? screen)
+    {
+        return screen != null && _removeCardSelectionScreenIds.Contains(screen.GetInstanceId());
+    }
+
+    internal static void UnregisterRemoveCardSelectionScreen(NDeckCardSelectScreen? screen)
+    {
+        if (screen == null)
+        {
+            return;
+        }
+
+        var screenId = screen.GetInstanceId();
+        if (_removeCardSelectionScreenIds.Remove(screenId))
+        {
+            Log.Info($"Unregistered remove-card selector screen: id={screenId}");
+        }
+    }
+
+    internal static void RegisterEnchantCardSelectionScreen(NDeckCardSelectScreen screen)
+    {
+        var screenId = screen.GetInstanceId();
+        if (_enchantCardSelectionScreenIds.Add(screenId))
+        {
+            Log.Info($"Registered enchant-card selector screen: id={screenId}");
+        }
+    }
+
+    internal static bool IsEnchantCardSelectionScreen(NDeckCardSelectScreen? screen)
+    {
+        return screen != null && _enchantCardSelectionScreenIds.Contains(screen.GetInstanceId());
+    }
+
+    internal static void UnregisterEnchantCardSelectionScreen(NDeckCardSelectScreen? screen)
+    {
+        if (screen == null)
+        {
+            return;
+        }
+
+        var screenId = screen.GetInstanceId();
+        if (_enchantCardSelectionScreenIds.Remove(screenId))
+        {
+            Log.Info($"Unregistered enchant-card selector screen: id={screenId}");
+        }
+    }
+
+    internal static void TryHideRemoveCardPeekButton(NDeckCardSelectScreen? screen)
+    {
+        if (!IsRemoveCardSelectionScreen(screen) && !IsEnchantCardSelectionScreen(screen))
+        {
+            return;
+        }
+
+        var peekButton = screen!.GetNodeOrNull<Control>("%PeekButton");
+        if (peekButton == null)
+        {
+            Log.Warn("Card selector peek button not found.");
+            return;
+        }
+
+        peekButton.Visible = false;
+        peekButton.MouseFilter = Control.MouseFilterEnum.Ignore;
+        peekButton.FocusMode = Control.FocusModeEnum.None;
+    }
+
     internal static bool IsRelicRemovalMultiSelectScreen(NChooseARelicSelection? screen)
     {
         return _isRelicMultiSelectActive
@@ -664,6 +912,7 @@ internal static class LiveDeckEditor
 
             ConfigureRemoveRelicSelectionTexts(screen);
             EnsureRelicWheelInputConnected(screen);
+            EnsureRelicBackButton(screen);
             Log.Info("Configured remove-relic selector UI texts.");
         }
         catch (Exception ex)
@@ -730,6 +979,44 @@ internal static class LiveDeckEditor
         }
     }
 
+    internal static bool TryCancelRelicMultiSelection(NChooseARelicSelection screen)
+    {
+        if (!IsRelicRemovalMultiSelectScreen(screen))
+        {
+            return false;
+        }
+
+        try
+        {
+            var traverse = Traverse.Create(screen);
+            var completionSource = traverse.Field<TaskCompletionSource<IEnumerable<RelicModel>>>("_completionSource").Value;
+            if (completionSource == null)
+            {
+                Log.Warn("Relic multi-select completion source was null while canceling; fallback to default behavior.");
+                EndRelicMultiSelectSession();
+                return false;
+            }
+
+            traverse.Field<bool>("_screenComplete").Value = true;
+            traverse.Field<bool>("_relicSelected").Value = false;
+            _selectedRelicHolderIds.Clear();
+
+            if (!completionSource.Task.IsCompleted)
+            {
+                completionSource.SetResult(Array.Empty<RelicModel>());
+            }
+
+            Log.Info("Canceled remove-relic multi-select via custom back button.");
+            EndRelicMultiSelectSession();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Failed to cancel remove-relic multi-select: {ex.Message}");
+            EndRelicMultiSelectSession();
+            return false;
+        }
+    }
     private static IEnumerable<RelicModel> CollectSelectedRelicsFromScreen(NChooseARelicSelection screen)
     {
         var relicRow = screen.GetNodeOrNull<Control>("RelicRow");
@@ -810,6 +1097,170 @@ internal static class LiveDeckEditor
         hintLabel.OffsetRight = 220f;
         hintLabel.OffsetTop = top;
         hintLabel.OffsetBottom = top + 30f;
+    }
+    private static void EnsureRelicBackButton(NChooseARelicSelection screen)
+    {
+        RemoveLegacyRelicBackButton(screen);
+
+        var backButton = screen.GetNodeOrNull<NBackButton>(RelicBackButtonNodeName);
+        if (backButton == null)
+        {
+            var template = FindBackButtonTemplate(screen);
+            if (template == null)
+            {
+                Log.Warn("Could not find native NBackButton template for remove-relic selector.");
+                return;
+            }
+
+            var duplicatedNode = template.Duplicate((int)(Node.DuplicateFlags.Groups | Node.DuplicateFlags.Scripts | Node.DuplicateFlags.UseInstantiation));
+            backButton = duplicatedNode as NBackButton;
+            if (backButton == null)
+            {
+                Log.Warn("Failed to clone native NBackButton for remove-relic selector.");
+                return;
+            }
+
+            backButton.Name = RelicBackButtonNodeName;
+            backButton.ZIndex = 1000;
+            backButton.Connect(NClickableControl.SignalName.Released, Callable.From<NButton>(_ =>
+            {
+                TryCancelRelicMultiSelection(screen);
+            }), 0U);
+            screen.AddChild(backButton);
+        }
+
+        backButton.ZIndex = 1000;
+        NormalizeBackButtonOffset(backButton);
+        backButton.Call("OnWindowChange");
+        backButton.Call("MoveToHidePosition");
+        backButton.ReleaseFocus();
+        backButton.Disable();
+        backButton.Enable();
+    }
+
+    private static void RemoveLegacyRelicBackButton(NChooseARelicSelection screen)
+    {
+        var legacyButton = screen.GetNodeOrNull<NChoiceSelectionSkipButton>(RelicBackButtonNodeName);
+        legacyButton?.QueueFree();
+    }
+
+
+    private static void NormalizeBackButtonOffset(NBackButton backButton)
+    {
+        try
+        {
+            var traverse = Traverse.Create(backButton);
+            var posOffset = traverse.Field<Vector2>("_posOffset").Value;
+            const float defaultX = 40f;
+            if (Math.Abs(posOffset.X - defaultX) > 0.01f)
+            {
+                traverse.Field<Vector2>("_posOffset").Value = new Vector2(defaultX, posOffset.Y);
+                Log.Info($"Normalized remove-relic back button offset X: {posOffset.X:0.##} -> {defaultX:0.##}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Failed to normalize remove-relic back button offset: {ex.Message}");
+        }
+    }
+    private static NBackButton? FindBackButtonTemplate(NChooseARelicSelection screen)
+    {
+        var root = screen.GetTree()?.Root;
+        if (root == null)
+        {
+            return null;
+        }
+
+        NBackButton? preferredVisible = null;
+        var preferredVisibleX = float.MaxValue;
+        NBackButton? preferredAny = null;
+        var preferredAnyX = float.MaxValue;
+        NBackButton? fallbackVisible = null;
+        var fallbackVisibleX = float.MaxValue;
+        NBackButton? fallbackAny = null;
+        var fallbackAnyX = float.MaxValue;
+
+        var stack = new Stack<Node>();
+        stack.Push(root);
+
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            if (current is NBackButton backButton && !backButton.IsQueuedForDeletion())
+            {
+                if (!screen.IsAncestorOf(backButton) && HasBackButtonVisualChildren(backButton))
+                {
+                    var nodeName = backButton.Name.ToString();
+                    var isPreferred = string.Equals(nodeName, "BackButton", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(nodeName, "Back", StringComparison.OrdinalIgnoreCase);
+                    var isInvalid = nodeName.Contains("Cancel", StringComparison.OrdinalIgnoreCase)
+                        || nodeName.Contains("Close", StringComparison.OrdinalIgnoreCase)
+                        || nodeName.Contains("Unready", StringComparison.OrdinalIgnoreCase);
+
+                    if (!isInvalid)
+                    {
+                        var x = backButton.GlobalPosition.X;
+                        if (isPreferred)
+                        {
+                            if (x < preferredAnyX)
+                            {
+                                preferredAny = backButton;
+                                preferredAnyX = x;
+                            }
+
+                            if (backButton.IsVisibleInTree() && x < preferredVisibleX)
+                            {
+                                preferredVisible = backButton;
+                                preferredVisibleX = x;
+                            }
+                        }
+                        else
+                        {
+                            if (x < fallbackAnyX)
+                            {
+                                fallbackAny = backButton;
+                                fallbackAnyX = x;
+                            }
+
+                            if (backButton.IsVisibleInTree() && x < fallbackVisibleX)
+                            {
+                                fallbackVisible = backButton;
+                                fallbackVisibleX = x;
+                            }
+                        }
+                    }
+                }
+            }
+
+            for (var i = current.GetChildCount() - 1; i >= 0; i--)
+            {
+                var child = current.GetChild(i);
+                if (child == null)
+                {
+                    continue;
+                }
+
+                stack.Push(child);
+            }
+        }
+
+        var chosen = preferredVisible
+            ?? preferredAny
+            ?? fallbackVisible
+            ?? fallbackAny;
+
+        if (chosen != null)
+        {
+            Log.Info($"Using native back-button template: name={chosen.Name}, x={chosen.GlobalPosition.X:0.##}");
+        }
+
+        return chosen;
+    }
+
+    private static bool HasBackButtonVisualChildren(NBackButton backButton)
+    {
+        return backButton.GetNodeOrNull<Control>("Outline") != null
+            && backButton.GetNodeOrNull<Control>("Image") != null;
     }
 
     private static void EnsureRelicWheelInputConnected(NChooseARelicSelection screen)
@@ -1019,6 +1470,21 @@ internal static class LiveDeckEditor
         }
     }
 
+    private static void CloseCapstonePickerIfPresent(string reason)
+    {
+        try
+        {
+            if (NCapstoneContainer.Instance?.CurrentCapstoneScreen is NCapstoneSubmenuStack)
+            {
+                NCapstoneContainer.Instance.Close();
+                Log.Info($"Closed capstone picker after selection flow: {reason}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Failed to close capstone picker after selection flow: {ex.Message}");
+        }
+    }
     private static void ClosePauseMenu()
     {
         try
@@ -1032,6 +1498,33 @@ internal static class LiveDeckEditor
         }
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
